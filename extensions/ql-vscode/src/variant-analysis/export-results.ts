@@ -10,7 +10,8 @@ import {
 } from "../common/vscode/progress";
 import { showInformationMessageWithAction } from "../common/vscode/dialog";
 import { extLogger } from "../common/logging/vscode";
-import { createGist } from "./gh-api/gh-api-client";
+import { createGist } from "./variant-analysis-api";
+import { isVariantAnalysisServerConfigured } from "../config";
 import type { MarkdownFile, RepositorySummary } from "./markdown-generation";
 import { generateVariantAnalysisMarkdown } from "./markdown-generation";
 import { pluralize } from "../common/word";
@@ -208,14 +209,16 @@ async function determineExportFormat(): Promise<"gist" | "local" | undefined> {
     label: "$(markdown) Save as markdown",
   };
 
-  const exportFormat = await window.showQuickPick(
-    [gistOption, localMarkdownOption],
-    {
-      placeHolder: "Select export format",
-      canPickMany: false,
-      ignoreFocusOut: true,
-    },
-  );
+  // Results must not be sent to GitHub when using a custom server.
+  const options = isVariantAnalysisServerConfigured()
+    ? [localMarkdownOption]
+    : [gistOption, localMarkdownOption];
+
+  const exportFormat = await window.showQuickPick(options, {
+    placeHolder: "Select export format",
+    canPickMany: false,
+    ignoreFocusOut: true,
+  });
   if (!exportFormat || !exportFormat.label) {
     throw new UserCancellationException("No export format selected", true);
   }

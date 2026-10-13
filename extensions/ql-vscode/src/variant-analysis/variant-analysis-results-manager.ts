@@ -200,13 +200,11 @@ export class VariantAnalysisResultsManager extends DisposableObject {
     const repoTask: VariantAnalysisRepositoryTask =
       await readRepoTask(storageDirectory);
 
-    if (!repoTask.databaseCommitSha || !repoTask.sourceLocationPrefix) {
-      throw new Error("Missing database commit SHA");
-    }
-
+    // Some servers do not report these, so fall back to linking to the
+    // default branch and to the legacy source location handling.
     const fileLinkPrefix = this.createGitHubFileLinkPrefix(
       repoTask.repository.fullName,
-      repoTask.databaseCommitSha,
+      repoTask.databaseCommitSha || "HEAD",
     );
 
     const resultsDirectory = join(
@@ -233,7 +231,7 @@ export class VariantAnalysisResultsManager extends DisposableObject {
       rawResults = await this.readBqrsResults(
         bqrsPath,
         fileLinkPrefix,
-        repoTask.sourceLocationPrefix,
+        repoTask.sourceLocationPrefix ?? "",
       );
     }
 

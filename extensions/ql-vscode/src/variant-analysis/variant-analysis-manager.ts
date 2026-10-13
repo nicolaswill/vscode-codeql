@@ -1,9 +1,10 @@
 import { join } from "path";
 
 import {
+  cancelVariantAnalysis,
   submitVariantAnalysis,
   getVariantAnalysisRepo,
-} from "./gh-api/gh-api-client";
+} from "./variant-analysis-api";
 import type { VariantAnalysis as ApiVariantAnalysis } from "./gh-api/variant-analysis";
 import type {
   AuthenticationSessionsChangeEvent,
@@ -52,7 +53,6 @@ import PQueue from "p-queue";
 import { createTimestampFile, saveBeforeStart } from "../run-queries-shared";
 import { readFile, remove, pathExists } from "fs-extra";
 import { EOL } from "os";
-import { cancelVariantAnalysis } from "./gh-api/gh-actions-api-client";
 import type { ProgressCallback } from "../common/vscode/progress";
 import {
   UserCancellationException,
@@ -98,7 +98,7 @@ import { resolveCodeScanningQueryPack } from "./code-scanning-pack";
 import { isSarifResultsQueryKind } from "../common/query-metadata";
 import { isVariantAnalysisEnabledForGitHubHost } from "./ghec-dr";
 import type { VariantAnalysisConfig } from "../config";
-import { getEnterpriseUri } from "../config";
+import { getEnterpriseUri, isVariantAnalysisServerConfigured } from "../config";
 
 const maxRetryCount = 3;
 
@@ -957,6 +957,12 @@ export class VariantAnalysisManager
     const variantAnalysis = this.variantAnalyses.get(variantAnalysisId);
     if (!variantAnalysis) {
       throw new Error(`No variant analysis with id: ${variantAnalysisId}`);
+    }
+
+    if (isVariantAnalysisServerConfigured()) {
+      throw new Error(
+        "Viewing logs is not supported when using a custom variant analysis server.",
+      );
     }
 
     const actionsWorkflowRunUrl = getActionsWorkflowRunUrl(
