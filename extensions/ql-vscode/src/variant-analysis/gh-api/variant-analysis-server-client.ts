@@ -6,9 +6,7 @@ import type { VariantAnalysisServerConfig } from "../../config";
  * INTERNAL AND UNSUPPORTED: client for a self-hosted variant analysis server
  * that implements the GitHub variant analysis REST endpoints. See
  * docs/variant-analysis-custom-server.md.
- */
-
-/**
+ *
  * The export that the configured token provider extension must implement.
  */
 export interface VariantAnalysisServerTokenProvider {
@@ -65,11 +63,13 @@ export async function requestVariantAnalysisServer<T>(
   method: "GET" | "POST",
   path: string,
   body?: unknown,
+  allowEmptyResponse = false,
 ): Promise<T> {
   const token = await getToken(server);
   const url = `${server.url}${path}`;
 
   const response = await fetch(url, {
+    redirect: "error",
     method,
     headers: {
       Accept: "application/json",
@@ -84,7 +84,12 @@ export async function requestVariantAnalysisServer<T>(
   if (text) {
     try {
       data = JSON.parse(text);
-    } catch {
+    } catch (cause) {
+      if (response.ok) {
+        throw new Error("Variant analysis server returned invalid JSON.", {
+          cause,
+        });
+      }
       data = text;
     }
   }
@@ -104,6 +109,10 @@ export async function requestVariantAnalysisServer<T>(
         },
       },
     );
+  }
+
+  if (!text && !allowEmptyResponse) {
+    throw new Error("Variant analysis server returned an empty response.");
   }
 
   return data as T;

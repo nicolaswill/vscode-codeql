@@ -11,7 +11,6 @@ import {
 import { showInformationMessageWithAction } from "../common/vscode/dialog";
 import { extLogger } from "../common/logging/vscode";
 import { createGist } from "./variant-analysis-api";
-import { isVariantAnalysisServerConfigured } from "../config";
 import type { MarkdownFile, RepositorySummary } from "./markdown-generation";
 import { generateVariantAnalysisMarkdown } from "./markdown-generation";
 import { pluralize } from "../common/word";
@@ -70,7 +69,7 @@ export async function exportVariantAnalysisResults(
         message: "Determining export format",
       });
 
-      const exportFormat = await determineExportFormat();
+      const exportFormat = await determineExportFormat(variantAnalysis);
       if (!exportFormat) {
         return;
       }
@@ -195,13 +194,16 @@ async function exportVariantAnalysisAnalysisResults(
     credentials,
     progress,
     token,
+    variantAnalysis.serverUrl,
   );
 }
 
 /**
  * Determines the format in which to export the results, from the given export options.
  */
-async function determineExportFormat(): Promise<"gist" | "local" | undefined> {
+async function determineExportFormat(
+  variantAnalysis: VariantAnalysis,
+): Promise<"gist" | "local" | undefined> {
   const gistOption = {
     label: "$(ports-open-browser-icon) Create Gist (GitHub)",
   };
@@ -210,7 +212,7 @@ async function determineExportFormat(): Promise<"gist" | "local" | undefined> {
   };
 
   // Results must not be sent to GitHub when using a custom server.
-  const options = isVariantAnalysisServerConfigured()
+  const options = variantAnalysis.serverUrl
     ? [localMarkdownOption]
     : [gistOption, localMarkdownOption];
 
@@ -242,6 +244,7 @@ async function exportResults(
   credentials: Credentials,
   progress?: ProgressCallback,
   token?: CancellationToken,
+  serverUrl?: string,
 ) {
   if (token?.isCancellationRequested) {
     throw new UserCancellationException("Cancelled");
@@ -255,6 +258,7 @@ async function exportResults(
       credentials,
       progress,
       token,
+      serverUrl,
     );
   } else if (exportFormat === "local") {
     await exportToLocalMarkdown(
@@ -274,6 +278,7 @@ async function exportToGist(
   credentials: Credentials,
   progress?: ProgressCallback,
   token?: CancellationToken,
+  serverUrl?: string,
 ) {
   progress?.({
     maxStep: MAX_VARIANT_ANALYSIS_EXPORT_PROGRESS_STEPS,
@@ -294,7 +299,12 @@ async function exportToGist(
     {} as { [key: string]: { content: string } },
   );
 
-  const gistUrl = await createGist(credentials, description, gistFiles);
+  const gistUrl = await createGist(
+    credentials,
+    description,
+    gistFiles,
+    serverUrl,
+  );
   if (gistUrl) {
     // This needs to use .then to ensure we aren't keeping the progress notification open. We shouldn't await the
     // "Open gist" button click.

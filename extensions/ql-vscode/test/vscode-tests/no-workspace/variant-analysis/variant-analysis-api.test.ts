@@ -1,12 +1,12 @@
 import { ConfigurationTarget, extensions, workspace } from "vscode";
 import type { Extension } from "vscode";
-import { RequestError } from "@octokit/request-error";
 import { getVariantAnalysisServerConfig } from "../../../../src/config";
 import {
   cancelVariantAnalysis,
   createGist,
   getVariantAnalysis,
   getVariantAnalysisRepo,
+  getServerForVariantAnalysis,
   submitVariantAnalysis,
 } from "../../../../src/variant-analysis/variant-analysis-api";
 import { isVariantAnalysisEnabledForGitHubHost } from "../../../../src/variant-analysis/ghec-dr";
@@ -56,6 +56,18 @@ describe("variant analysis custom server", () => {
   });
 
   describe("configuration", () => {
+    it.each([`${SERVER_URL}/?environment=test`, `${SERVER_URL}/#fragment`])(
+      "rejects endpoint modifiers: %s",
+      async (url) => {
+        await setSetting("serverUrl", url);
+        expect(() => getVariantAnalysisServerConfig()).toThrow();
+      },
+    );
+
+    it("preserves a base path", async () => {
+      await setSetting("serverUrl", `${SERVER_URL}/api/`);
+      expect(getVariantAnalysisServerConfig()?.url).toBe(`${SERVER_URL}/api`);
+    });
     it("is not configured by default", () => {
       expect(getVariantAnalysisServerConfig()).toBeUndefined();
     });
@@ -122,6 +134,7 @@ describe("variant analysis custom server", () => {
     it("submits to the server with the provided token", async () => {
       const submission = createMockSubmission();
       submission.controllerRepoId = 0;
+      submission.serverUrl = SERVER_URL;
 
       const result = await submitVariantAnalysis(credentials, submission);
 
@@ -133,6 +146,7 @@ describe("variant analysis custom server", () => {
         `${SERVER_URL}/repositories/0/code-scanning/codeql/variant-analyses`,
       );
       expect(init?.method).toBe("POST");
+      expect(init?.redirect).toBe("error");
       expect(init?.headers).toMatchObject({
         Authorization: "Bearer the-token",
         "Content-Type": "application/json",
@@ -145,8 +159,8 @@ describe("variant analysis custom server", () => {
     });
 
     it("gets a variant analysis and a repo task", async () => {
-      await getVariantAnalysis(credentials, 0, 5);
-      await getVariantAnalysisRepo(credentials, 0, 5, 7);
+      await getVariantAnalysis(credentials, 0, 5, SERVER_URL);
+      await getVariantAnalysisRepo(credentials, 0, 5, 7, SERVER_URL);
 
       expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
         `${SERVER_URL}/repositories/0/code-scanning/codeql/variant-analyses/5`,
@@ -155,7 +169,9 @@ describe("variant analysis custom server", () => {
     });
 
     it("cancels on the server", async () => {
+      fetchSpy.mockResolvedValue(new Response(null, { status: 202 }));
       const variantAnalysis = createMockVariantAnalysis({});
+      variantAnalysis.serverUrl = SERVER_URL;
 
       await cancelVariantAnalysis(credentials, variantAnalysis);
 
@@ -165,8 +181,18 @@ describe("variant analysis custom server", () => {
       );
     });
 
+    it.each(["<html>not JSON</html>", ""])(
+      "rejects a malformed successful response: %s",
+      async (body) => {
+        fetchSpy.mockResolvedValue(new Response(body));
+        await expect(
+          getVariantAnalysis(credentials, 0, 5, SERVER_URL),
+        ).rejects.toThrow(/invalid JSON|empty response/);
+      },
+    );
+
     it("does not export to a gist", async () => {
-      await expect(createGist(credentials, "", {})).rejects.toThrow(
+      await expect(createGist(credentials, "", {}, SERVER_URL)).rejects.toThrow(
         /not supported/,
       );
       expect(fetchSpy).not.toHaveBeenCalled();
@@ -175,27 +201,27 @@ describe("variant analysis custom server", () => {
     it("fails without a token, without sending a request", async () => {
       getVariantAnalysisServerToken.mockResolvedValue(undefined);
 
-      await expect(getVariantAnalysis(credentials, 0, 5)).rejects.toThrow(
-        /did not return a variant analysis server token/,
-      );
+      await expect(
+        getVariantAnalysis(credentials, 0, 5, SERVER_URL),
+      ).rejects.toThrow(/did not return a variant analysis server token/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it("fails if no token provider is configured", async () => {
       await setSetting("serverTokenProvider", "");
 
-      await expect(getVariantAnalysis(credentials, 0, 5)).rejects.toThrow(
-        /No token provider/,
-      );
+      await expect(
+        getVariantAnalysis(credentials, 0, 5, SERVER_URL),
+      ).rejects.toThrow(/No token provider/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it("fails if the token provider is not installed", async () => {
       await setSetting("serverTokenProvider", "other.extension");
 
-      await expect(getVariantAnalysis(credentials, 0, 5)).rejects.toThrow(
-        /not installed/,
-      );
+      await expect(
+        getVariantAnalysis(credentials, 0, 5, SERVER_URL),
+      ).rejects.toThrow(/not installed/);
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
@@ -207,16 +233,54 @@ describe("variant analysis custom server", () => {
         }),
       );
 
-      const error = await getVariantAnalysis(credentials, 0, 5).catch(
-        (e: unknown) => e,
-      );
+      await expect(
+        getVariantAnalysis(credentials, 0, 5, SERVER_URL),
+      ).rejects.toMatchObject({
+        status: 401,
+        message: expect.stringContaining("401 Unauthorized: Token expired"),
+      });
+    });
 
-      expect(error).toBeInstanceOf(RequestError);
-      expect((error as RequestError).status).toBe(401);
-      expect((error as RequestError).message).toContain(
-        "401 Unauthorized: Token expired",
+    it("preserves HTTP error status when the response body is empty", async () => {
+      fetchSpy.mockResolvedValue(new Response(null, { status: 404 }));
+      await expect(
+        getVariantAnalysis(credentials, 0, 5, SERVER_URL),
+      ).rejects.toMatchObject({ status: 404 });
+    });
+
+    it("rejects custom runs after removing the setting", async () => {
+      await setSetting("serverUrl", "");
+      expect(() => getServerForVariantAnalysis(SERVER_URL)).toThrow(
+        /different server/,
       );
-      expect((error as RequestError).message).not.toContain("the-token");
+      await expect(createGist(credentials, "", {}, SERVER_URL)).rejects.toThrow(
+        /not supported/,
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("rejects legacy GitHub runs when a custom server is configured", async () => {
+      await setSetting("serverUrl", SERVER_URL);
+      await expect(getVariantAnalysis(credentials, 0, 5)).rejects.toThrow(
+        /different server/,
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("rejects status, results, and cancellation after changing servers", async () => {
+      await setSetting("serverUrl", "https://other.example.com");
+      const run = createMockVariantAnalysis({});
+      run.serverUrl = SERVER_URL;
+      await expect(
+        getVariantAnalysis(credentials, 0, 5, SERVER_URL),
+      ).rejects.toThrow(/different server/);
+      await expect(
+        getVariantAnalysisRepo(credentials, 0, 5, 7, SERVER_URL),
+      ).rejects.toThrow(/different server/);
+      await expect(cancelVariantAnalysis(credentials, run)).rejects.toThrow(
+        /different server/,
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 });

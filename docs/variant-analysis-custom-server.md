@@ -21,6 +21,8 @@ so a repository cannot redirect queries or tokens.
 | `codeQL.variantAnalysis.serverTokenProvider` | ID (`publisher.name`) of the installed extension that provides the token. |
 
 If `serverUrl` is set but invalid, variant analysis fails instead of falling back to GitHub.
+Query strings and fragments are rejected; base path prefixes are supported.
+The hidden server setting is the opt-in switch; there is no additional canary gate.
 
 ## Token provider extension
 
@@ -45,14 +47,22 @@ themselves as providers.
 - MRVA is enabled regardless of `github-enterprise.uri`. The GitHub sign-in, GitHub database
   downloads and other extensions that read `github-enterprise.uri` are not affected.
 - No controller repository is needed. Requests use controller repository ID `0`.
+- Runs retain their originating server URL. Polling, task retrieval and cancellation fail if
+  the current server setting differs. Restore the original setting to resume them. Legacy runs
+  without a server URL are treated as GitHub runs.
 - The GitHub token is never sent to the server, and results are never uploaded to GitHub:
   "Export to gist" and "View logs" (GitHub Actions) are unavailable.
 - Result artifacts are downloaded from `artifact_url` without authentication, as on GitHub.
 - If a repository task has no `database_commit_sha`, file links point to `HEAD`.
+  These links may not match the analyzed revision.
+- The canary-only autofix action still downloads repository source through GitHub sign-in.
+  It requires the analyzed repository and revision to be available on the configured GitHub host.
+  Custom source retrieval is not supported.
 
 ## Server contract
 
 All paths are relative to `serverUrl`. Requests send `Authorization: Bearer <token>` and JSON bodies.
+Redirects are rejected rather than forwarding query packs to another endpoint.
 Request and response shapes match `src/variant-analysis/gh-api/variant-analysis.ts`.
 
 | Operation | Request |

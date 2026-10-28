@@ -101,6 +101,7 @@ export class VariantAnalysisMonitor extends DisposableObject {
           this.app.credentials,
           controllerRepoId,
           variantAnalysisId,
+          this.getVariantAnalysis(variantAnalysisId).serverUrl,
         );
       } catch (e) {
         const errorMessage = getErrorMessage(e);

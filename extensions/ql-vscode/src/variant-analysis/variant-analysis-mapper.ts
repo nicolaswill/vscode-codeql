@@ -9,6 +9,7 @@ import type {
   VariantAnalysisSkippedRepositoryGroup as ApiVariantAnalysisSkippedRepositoryGroup,
   VariantAnalysisNotFoundRepositoryGroup as ApiVariantAnalysisNotFoundRepositoryGroup,
   VariantAnalysisRepoTask as ApiVariantAnalysisRepoTask,
+  VariantAnalysisSubmissionRequest,
 } from "./gh-api/variant-analysis";
 import type {
   VariantAnalysis,
@@ -24,6 +25,19 @@ import {
   VariantAnalysisRepoStatus,
 } from "./shared/variant-analysis";
 
+export function mapVariantAnalysisSubmission(
+  submission: VariantAnalysisSubmission,
+): VariantAnalysisSubmissionRequest {
+  return {
+    action_repo_ref: submission.actionRepoRef,
+    language: submission.language,
+    query_pack: submission.pack,
+    repositories: submission.databases.repositories,
+    repository_lists: submission.databases.repositoryLists,
+    repository_owners: submission.databases.repositoryOwners,
+  };
+}
+
 export function mapVariantAnalysisFromSubmission(
   submission: VariantAnalysisSubmission,
   apiVariantAnalysis: ApiVariantAnalysis,
@@ -31,6 +45,7 @@ export function mapVariantAnalysisFromSubmission(
 ): VariantAnalysis {
   return mapVariantAnalysis(
     {
+      serverUrl: submission.serverUrl,
       language: submission.language,
       query: {
         name: submission.query.name,
@@ -63,6 +78,7 @@ function mapVariantAnalysis(
   currentVariantAnalysis: Pick<
     VariantAnalysis,
     | "language"
+    | "serverUrl"
     | "query"
     | "queries"
     | "databases"
@@ -92,6 +108,7 @@ function mapVariantAnalysis(
 
   const variantAnalysis: VariantAnalysis = {
     id: response.id,
+    serverUrl: currentVariantAnalysis.serverUrl,
     controllerRepo: {
       id: response.controller_repo.id,
       fullName: response.controller_repo.full_name,

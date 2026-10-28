@@ -10,9 +10,9 @@ import {
 import type {
   VariantAnalysis as ApiVariantAnalysis,
   VariantAnalysisRepoTask as ApiVariantAnalysisRepoTask,
-  VariantAnalysisSubmissionRequest,
 } from "./gh-api/variant-analysis";
 import { requestVariantAnalysisServer } from "./gh-api/variant-analysis-server-client";
+import { mapVariantAnalysisSubmission } from "./variant-analysis-mapper";
 import type {
   VariantAnalysis,
   VariantAnalysisSubmission,
@@ -28,30 +28,30 @@ function variantAnalysesPath(controllerRepoId: number): string {
   return `/repositories/${controllerRepoId}/code-scanning/codeql/variant-analyses`;
 }
 
+export function getServerForVariantAnalysis(serverUrl: string | undefined) {
+  const server = getVariantAnalysisServerConfig();
+  if (server?.url !== serverUrl) {
+    throw new Error(
+      "This variant analysis belongs to a different server. Restore the server setting used to submit it before retrying.",
+    );
+  }
+  return server;
+}
+
 export async function submitVariantAnalysis(
   credentials: Credentials,
   submission: VariantAnalysisSubmission,
 ): Promise<ApiVariantAnalysis> {
-  const server = getVariantAnalysisServerConfig();
+  const server = getServerForVariantAnalysis(submission.serverUrl);
   if (!server) {
     return submitGitHubVariantAnalysis(credentials, submission);
   }
 
-  const { actionRepoRef, language, pack, databases, controllerRepoId } =
-    submission;
-  const data: VariantAnalysisSubmissionRequest = {
-    action_repo_ref: actionRepoRef,
-    language,
-    query_pack: pack,
-    repositories: databases.repositories,
-    repository_lists: databases.repositoryLists,
-    repository_owners: databases.repositoryOwners,
-  };
   return requestVariantAnalysisServer<ApiVariantAnalysis>(
     server,
     "POST",
-    variantAnalysesPath(controllerRepoId),
-    data,
+    variantAnalysesPath(submission.controllerRepoId),
+    mapVariantAnalysisSubmission(submission),
   );
 }
 
@@ -59,8 +59,9 @@ export async function getVariantAnalysis(
   credentials: Credentials,
   controllerRepoId: number,
   variantAnalysisId: number,
+  serverUrl?: string,
 ): Promise<ApiVariantAnalysis> {
-  const server = getVariantAnalysisServerConfig();
+  const server = getServerForVariantAnalysis(serverUrl);
   if (!server) {
     return getGitHubVariantAnalysis(
       credentials,
@@ -81,8 +82,9 @@ export async function getVariantAnalysisRepo(
   controllerRepoId: number,
   variantAnalysisId: number,
   repoId: number,
+  serverUrl?: string,
 ): Promise<ApiVariantAnalysisRepoTask> {
-  const server = getVariantAnalysisServerConfig();
+  const server = getServerForVariantAnalysis(serverUrl);
   if (!server) {
     return getGitHubVariantAnalysisRepo(
       credentials,
@@ -103,7 +105,7 @@ export async function cancelVariantAnalysis(
   credentials: Credentials,
   variantAnalysis: VariantAnalysis,
 ): Promise<void> {
-  const server = getVariantAnalysisServerConfig();
+  const server = getServerForVariantAnalysis(variantAnalysis.serverUrl);
   if (!server) {
     return cancelGitHubVariantAnalysis(credentials, variantAnalysis);
   }
@@ -116,6 +118,8 @@ export async function cancelVariantAnalysis(
     server,
     "POST",
     `/repos/${fullName}/actions/runs/${actionsWorkflowRunId}/cancel`,
+    undefined,
+    true,
   );
 }
 
@@ -123,9 +127,10 @@ export async function createGist(
   credentials: Credentials,
   description: string,
   files: { [key: string]: { content: string } },
+  serverUrl?: string,
 ): Promise<string | undefined> {
   // Results from a custom server must not be uploaded to GitHub.
-  if (getVariantAnalysisServerConfig()) {
+  if (serverUrl) {
     throw new Error(
       "Exporting to a gist is not supported when using a custom variant analysis server.",
     );

@@ -54,6 +54,15 @@ export class Setting {
       .get<T>(this.name)!;
   }
 
+  getGlobalValue<T>(): T | undefined {
+    if (this.parent === undefined) {
+      throw new Error("Cannot get the value of a root setting.");
+    }
+    return workspace
+      .getConfiguration(this.parent.qualifiedName)
+      .inspect<T>(this.name)?.globalValue;
+  }
+
   updateValue<T>(value: T, target: ConfigurationTarget): Thenable<void> {
     if (this.parent === undefined) {
       throw new Error("Cannot update the value of a root setting.");
@@ -635,9 +644,7 @@ export interface VariantAnalysisServerConfig {
 }
 
 function getGlobalStringSetting(setting: Setting): string | undefined {
-  const value = workspace
-    .getConfiguration(setting.parent!.qualifiedName)
-    .inspect<string>(setting.name)?.globalValue;
+  const value = setting.getGlobalValue<string>();
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
@@ -661,9 +668,15 @@ export function getVariantAnalysisServerConfig():
       `Invalid ${VARIANT_ANALYSIS_SERVER_URL.qualifiedName} setting: ${rawUrl}`,
     );
   }
-  if (url.protocol !== "https:" || url.username || url.password) {
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
     throw new Error(
-      `${VARIANT_ANALYSIS_SERVER_URL.qualifiedName} must be an https URL without credentials.`,
+      `${VARIANT_ANALYSIS_SERVER_URL.qualifiedName} must be an https URL without credentials, a query string, or a fragment.`,
     );
   }
 
