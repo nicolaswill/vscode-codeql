@@ -1,6 +1,9 @@
 import { ConfigurationTarget, extensions, workspace } from "vscode";
 import type { Extension } from "vscode";
-import { getVariantAnalysisServerConfig } from "../../../../src/config";
+import {
+  getVariantAnalysisServerConfig,
+  VariantAnalysisConfigListener,
+} from "../../../../src/config";
 import {
   cancelVariantAnalysis,
   createGist,
@@ -15,6 +18,14 @@ import { createMockVariantAnalysis } from "../../../factories/variant-analysis/s
 import { mockedObject } from "../../utils/mocking.helpers";
 import { testCredentialsWithStub } from "../../../factories/authentication";
 import type { VariantAnalysisServerTokenProvider } from "../../../../src/variant-analysis/gh-api/variant-analysis-server-client";
+import {
+  writeQueryHistoryToFile,
+  readQueryHistoryFromFile,
+} from "../../../../src/query-history/store/query-history-store";
+import { createMockVariantAnalysisHistoryItem } from "../../../factories/query-history/variant-analysis-history-item";
+import { join } from "path";
+import { tmpDir } from "../../../../src/tmp-dir";
+import { remove } from "fs-extra";
 
 const SERVER_URL = "https://mrva.example.com";
 const PROVIDER_ID = "example.token-provider";
@@ -83,6 +94,19 @@ describe("variant analysis custom server", () => {
       expect(isVariantAnalysisEnabledForGitHubHost()).toBe(true);
     });
 
+    it("hides system-defined repository lists only in server mode", async () => {
+      const config = new VariantAnalysisConfigListener();
+      try {
+        expect(config.showSystemDefinedRepositoryLists).toBe(true);
+        await setSetting("serverUrl", SERVER_URL);
+        expect(config.showSystemDefinedRepositoryLists).toBe(false);
+        await setSetting("serverUrl", "");
+        expect(config.showSystemDefinedRepositoryLists).toBe(true);
+      } finally {
+        config.dispose();
+      }
+    });
+
     it("ignores workspace settings", async () => {
       await setSetting("serverUrl", SERVER_URL, ConfigurationTarget.Workspace);
       await setSetting(
@@ -131,6 +155,94 @@ describe("variant analysis custom server", () => {
       await setSetting("serverTokenProvider", PROVIDER_ID);
     });
 
+    it("routes a saved and reloaded server run back to its original endpoint", async () => {
+      const history = createMockVariantAnalysisHistoryItem({});
+      history.variantAnalysis.serverUrl = SERVER_URL;
+      history.variantAnalysis.controllerRepo.id = 0;
+      history.variantAnalysis.actionsWorkflowRunId = 42;
+      history.variantAnalysis.controllerRepo.htmlUrl =
+        "https://source.example.com/org/controller";
+      const historyPath = join(tmpDir.name, "custom-server-history.json");
+      try {
+        await writeQueryHistoryToFile([history], historyPath);
+        const [reloaded] = await readQueryHistoryFromFile(historyPath);
+        if (reloaded.t !== "variant-analysis") {
+          throw new Error("Expected a variant analysis history item");
+        }
+        const run = reloaded.variantAnalysis;
+        expect(run.serverUrl).toBe(SERVER_URL);
+        expect(run.controllerRepo.htmlUrl).toBe(
+          history.variantAnalysis.controllerRepo.htmlUrl,
+        );
+        await getVariantAnalysis(
+          credentials,
+          run.controllerRepo.id,
+          run.id,
+          run.serverUrl,
+        );
+        await getVariantAnalysisRepo(
+          credentials,
+          run.controllerRepo.id,
+          run.id,
+          7,
+          run.serverUrl,
+        );
+        await cancelVariantAnalysis(credentials, run);
+        expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
+          `${SERVER_URL}/repositories/0/code-scanning/codeql/variant-analyses/${run.id}`,
+          `${SERVER_URL}/repositories/0/code-scanning/codeql/variant-analyses/${run.id}/repositories/7`,
+          `${SERVER_URL}/repositories/0/code-scanning/codeql/variant-analyses/${run.id}/cancel`,
+        ]);
+      } finally {
+        await remove(historyPath);
+      }
+    });
+
+    it.each(["activation", "token"])(
+      "bounds a stalled provider %s",
+      async (stage) => {
+        jest.useFakeTimers();
+        try {
+          if (stage === "activation") {
+            jest.spyOn(extensions, "getExtension").mockReturnValue(
+              mockedObject<Extension<VariantAnalysisServerTokenProvider>>({
+                isActive: false,
+                activate: () => new Promise(() => {}),
+              }),
+            );
+          } else {
+            getVariantAnalysisServerToken.mockReturnValue(
+              new Promise(() => {}),
+            );
+          }
+          const request = getVariantAnalysis(credentials, 0, 5, SERVER_URL);
+          const rejected = expect(request).rejects.toThrow(
+            /did not respond within 30 seconds/,
+          );
+          await jest.advanceTimersByTimeAsync(30_000);
+          await rejected;
+          expect(fetchSpy).not.toHaveBeenCalled();
+          expect(jest.getTimerCount()).toBe(0);
+        } finally {
+          jest.useRealTimers();
+        }
+      },
+    );
+
+    it.each([401, 403])(
+      "identifies the provider on HTTP %s without retrying",
+      async (status) => {
+        fetchSpy.mockResolvedValue(new Response(null, { status }));
+        await expect(
+          getVariantAnalysis(credentials, 0, 5, SERVER_URL),
+        ).rejects.toThrow(
+          `Re-authenticate using the token provider '${PROVIDER_ID}'`,
+        );
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(getVariantAnalysisServerToken).toHaveBeenCalledTimes(1);
+      },
+    );
+
     it("submits to the server with the provided token", async () => {
       const submission = createMockSubmission();
       submission.controllerRepoId = 0;
@@ -172,11 +284,12 @@ describe("variant analysis custom server", () => {
       fetchSpy.mockResolvedValue(new Response(null, { status: 202 }));
       const variantAnalysis = createMockVariantAnalysis({});
       variantAnalysis.serverUrl = SERVER_URL;
+      variantAnalysis.actionsWorkflowRunId = undefined;
 
       await cancelVariantAnalysis(credentials, variantAnalysis);
 
       expect(fetchSpy).toHaveBeenCalledWith(
-        `${SERVER_URL}/repos/${variantAnalysis.controllerRepo.fullName}/actions/runs/${variantAnalysis.actionsWorkflowRunId}/cancel`,
+        `${SERVER_URL}/repositories/${variantAnalysis.controllerRepo.id}/code-scanning/codeql/variant-analyses/${variantAnalysis.id}/cancel`,
         expect.objectContaining({ method: "POST" }),
       );
     });

@@ -12,8 +12,13 @@ extension, owned by the organization, supplies the token.
 
 ## Settings
 
-Both settings are only read from **user** or **machine** (remote) settings. Workspace and folder values are ignored,
+Both settings are only read from **local or remote user** settings. Workspace and folder values are ignored,
 so a repository cannot redirect queries or tokens.
+`inspect().globalValue` is VS Code's merged user value, including remote user settings;
+the remote value takes precedence over the local value. These are not OS-wide policy settings.
+Administrators can provision the remote user settings file directly. A companion extension writing
+with `ConfigurationTarget.Global` should not assume that the write always targets the remote file:
+VS Code's choice depends on the setting's scope and whether a remote value already exists.
 
 | Setting | Value |
 | --- | --- |
@@ -38,6 +43,10 @@ CodeQL activates the extension if it isn't already running, and calls `getVarian
 before every request. The provider is responsible for caching and refreshing the token. It should return
 `undefined` if no token is available, so that CodeQL can show a clear error instead of sending an
 unauthenticated request. The token is never logged.
+CodeQL waits at most 30 seconds for activation and token acquisition combined. On timeout, no API
+request is sent; the provider's own work is not forcibly stopped. Finish sign-in in the provider and retry.
+HTTP 401/403 errors identify the provider and ask the user to re-authenticate; there is no automatic retry
+or token-refresh argument.
 
 Only the extension that the user or administrator names is called. Extensions cannot register
 themselves as providers.
@@ -55,6 +64,11 @@ themselves as providers.
 - Result artifacts are downloaded from `artifact_url` without authentication, as on GitHub.
 - If a repository task has no `database_commit_sha`, file links point to `HEAD`.
   These links may not match the analyzed revision.
+- Custom-server file links use `repository.html_url` from the task or analysis response.
+  If it is absent or not an HTTP(S) URL, results still display, but file locations are plain text.
+  GitHub run links retain their existing host fallback.
+- GitHub's built-in repository lists and the repository tree's "Open on GitHub" action are hidden
+  while a custom server is configured.
 - The canary-only autofix action still downloads repository source through GitHub sign-in.
   It requires the analyzed repository and revision to be available on the configured GitHub host.
   Custom source retrieval is not supported.
@@ -70,14 +84,25 @@ Request and response shapes match `src/variant-analysis/gh-api/variant-analysis.
 | Submit | `POST /repositories/0/code-scanning/codeql/variant-analyses` |
 | Get status | `GET /repositories/0/code-scanning/codeql/variant-analyses/{id}` |
 | Get repository task | `GET /repositories/0/code-scanning/codeql/variant-analyses/{id}/repositories/{repoId}` |
-| Cancel | `POST /repos/{controller_repo.full_name}/actions/runs/{actions_workflow_run_id}/cancel` |
+| Cancel | `POST /repositories/0/code-scanning/codeql/variant-analyses/{id}/cancel` |
 
-Variant analysis responses must include `controller_repo` and, for cancellation to work,
-`actions_workflow_run_id`. Errors should be returned as non-2xx responses with a JSON body
+Variant analysis responses must include `controller_repo`; subsequent requests use its `id` as the
+repository path parameter (normally `0`). The analysis `id` is the server's run/session identifier.
+Custom-server cancellation does not require `actions_workflow_run_id`; GitHub cancellation still uses
+the GitHub Actions route and requires that field. Errors should be returned as non-2xx responses with a JSON body
 `{ "message": "..." }`. CodeQL shows the status and that message to the user.
 
 ## Running CodeQL in a remote workspace
 
-To run the CodeQL extension on the remote machine alongside the token provider, set the VS Code
-setting `remote.extensionKind` to `{ "github.vscode-codeql": ["workspace"] }`. No change to the
-extension is needed.
+CodeQL declares a Node `main` entry point, so VS Code normally classifies it as a workspace extension
+without an explicit `extensionKind`. Install both CodeQL and its token provider in the same remote
+extension host. No override should normally be necessary.
+
+If a deployment has overridden the placement, inspect `remote.extensionKind` and the editor's
+product overrides. The user setting `{ "github.vscode-codeql": ["workspace"] }` under
+`remote.extensionKind` can override placement, but should not be installed as a blanket workaround.
+
+VS Code implementation references:
+[configuration inspection](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/api/common/extHostConfiguration.ts),
+[local/remote user configuration merging](https://github.com/microsoft/vscode/blob/main/src/vs/platform/configuration/common/configurationModels.ts),
+and [extension kind inference](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/services/extensions/common/extensionManifestPropertiesService.ts).

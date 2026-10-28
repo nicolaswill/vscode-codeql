@@ -430,6 +430,7 @@ export class VariantAnalysisManager
     } catch (e) {
       // If the error is handled by the handleRequestError function, we don't need to throw
       if (
+        !serverUrl &&
         e instanceof RequestError &&
         handleRequestError(e, this.config.githubUrl, this.app.logger)
       ) {
@@ -645,7 +646,7 @@ export class VariantAnalysisManager
       variantAnalysisId,
       this.getVariantAnalysisStorageLocation(variantAnalysisId),
       repositoryFullName,
-      options,
+      { ...options, serverUrl: variantAnalysis.serverUrl },
     );
   }
 
@@ -816,6 +817,7 @@ export class VariantAnalysisManager
       );
 
       repoTask = mapVariantAnalysisRepositoryTask(repoTaskResponse);
+      repoTask.repository.htmlUrl ??= scannedRepo.repository.htmlUrl;
     } catch (e) {
       repoState.downloadStatus =
         VariantAnalysisScannedRepositoryDownloadStatus.Failed;
@@ -930,7 +932,7 @@ export class VariantAnalysisManager
       throw new Error(`No variant analysis with id: ${variantAnalysisId}`);
     }
 
-    if (!variantAnalysis.actionsWorkflowRunId) {
+    if (!variantAnalysis.serverUrl && !variantAnalysis.actionsWorkflowRunId) {
       throw new Error(
         `No workflow run id for variant analysis with id: ${variantAnalysis.id}`,
       );

@@ -1194,7 +1194,7 @@
         },
         {
           "command": "codeQLVariantAnalysisRepositories.openOnGitHubContextMenu",
-          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeOpenedOnGitHub/",
+          "when": "view == codeQLVariantAnalysisRepositories && viewItem =~ /canBeOpenedOnGitHub/ && !config.codeQL.variantAnalysis.serverUrl",
           "group": "2_qlContextMenu@1"
         },
         {

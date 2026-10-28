@@ -28,6 +28,24 @@ describe(mapVariantAnalysisFromSubmission.name, () => {
   );
   const mockSubmission = createMockSubmission();
 
+  it("preserves repository source URLs supplied by the server", () => {
+    const response = createMockApiResponse("succeeded");
+    response.controller_repo.html_url =
+      "https://source.example.com/org/controller";
+    response.scanned_repositories![0].repository.html_url =
+      "https://source.example.com/org/repo";
+    const run = mapVariantAnalysisFromSubmission(mockSubmission, response, []);
+    expect(run.controllerRepo.htmlUrl).toBe(response.controller_repo.html_url);
+    expect(run.scannedRepos?.[0].repository.htmlUrl).toBe(
+      response.scanned_repositories![0].repository.html_url,
+    );
+    const task = createMockVariantAnalysisRepoTask();
+    task.repository.html_url = "https://source.example.com/org/repo";
+    expect(mapVariantAnalysisRepositoryTask(task).repository.htmlUrl).toBe(
+      task.repository.html_url,
+    );
+  });
+
   it("preserves the server origin through submission and polling updates", () => {
     const submission = {
       ...mockSubmission,

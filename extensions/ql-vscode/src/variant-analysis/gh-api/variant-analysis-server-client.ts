@@ -17,8 +17,31 @@ export interface VariantAnalysisServerTokenProvider {
 export const SERVER_CONTROLLER_REPO_ID = 0;
 
 const MAX_ERROR_BODY_LENGTH = 500;
+const TOKEN_PROVIDER_TIMEOUT_MS = 30_000;
 
 async function getToken(server: VariantAnalysisServerConfig): Promise<string> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      getTokenFromExtension(server),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(
+            new Error(
+              `The variant analysis token provider '${server.tokenProviderExtensionId}' did not respond within 30 seconds. Complete sign-in in the provider extension and retry.`,
+            ),
+          );
+        }, TOKEN_PROVIDER_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getTokenFromExtension(
+  server: VariantAnalysisServerConfig,
+): Promise<string> {
   const extensionId = server.tokenProviderExtensionId;
   if (!extensionId) {
     throw new Error(
@@ -95,8 +118,12 @@ export async function requestVariantAnalysisServer<T>(
   }
 
   if (!response.ok) {
+    const authenticationMessage =
+      response.status === 401 || response.status === 403
+        ? ` Re-authenticate using the token provider '${server.tokenProviderExtensionId}' and retry.`
+        : "";
     throw new RequestError(
-      `Variant analysis server request failed: ${method} ${path}: ${response.status} ${response.statusText}${describeErrorBody(data)}`,
+      `Variant analysis server request failed: ${method} ${path}: ${response.status} ${response.statusText}${describeErrorBody(data)}${authenticationMessage}`,
       response.status,
       {
         request: { method, url, headers: {} },

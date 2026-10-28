@@ -110,14 +110,10 @@ export async function cancelVariantAnalysis(
     return cancelGitHubVariantAnalysis(credentials, variantAnalysis);
   }
 
-  const {
-    actionsWorkflowRunId,
-    controllerRepo: { fullName },
-  } = variantAnalysis;
   await requestVariantAnalysisServer(
     server,
     "POST",
-    `/repos/${fullName}/actions/runs/${actionsWorkflowRunId}/cancel`,
+    `${variantAnalysesPath(variantAnalysis.controllerRepo.id)}/${variantAnalysis.id}/cancel`,
     undefined,
     true,
   );
