@@ -17,6 +17,7 @@ import type {
   VariantAnalysis,
   VariantAnalysisSubmission,
 } from "./shared/variant-analysis";
+import { Disposable, EventEmitter, workspace } from "vscode";
 
 /**
  * Variant analysis API calls. These go to GitHub, unless an internal custom
@@ -53,20 +54,57 @@ export function getServerForVariantAnalysis(serverUrl: string | undefined) {
   return server;
 }
 
-export async function canViewVariantAnalysisLogs(
-  run: VariantAnalysis,
-): Promise<boolean> {
+const logCapabilities = new Map<string, { available: boolean }>();
+const logCapabilitiesChanged = new EventEmitter<void>();
+export const onDidChangeVariantAnalysisLogCapabilities =
+  logCapabilitiesChanged.event;
+
+export function watchVariantAnalysisLogCapabilities(): Disposable {
+  logCapabilities.clear();
+  return Disposable.from(
+    workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration("codeQL.variantAnalysis.serverUrl") ||
+        event.affectsConfiguration("codeQL.variantAnalysis.serverTokenProvider")
+      ) {
+        logCapabilities.clear();
+        logCapabilitiesChanged.fire();
+      }
+    }),
+    new Disposable(() => logCapabilities.clear()),
+  );
+}
+
+export function canViewVariantAnalysisLogs(run: VariantAnalysis): boolean {
   if (!run.serverUrl) {
     return run.actionsWorkflowRunId !== undefined;
   }
-  try {
-    return (await getServerLogOpener(run)) !== undefined;
-  } catch (error) {
-    void extLogger.log(
-      `Unable to discover variant analysis logs: ${getErrorMessage(error)}`,
-    );
+  const server = getVariantAnalysisServerConfig();
+  if (server?.url !== run.serverUrl || !server.tokenProviderExtensionId) {
     return false;
   }
+  const key = JSON.stringify([server.url, server.tokenProviderExtensionId]);
+  const cached = logCapabilities.get(key);
+  if (cached) {
+    return cached.available;
+  }
+  const capability = { available: false };
+  logCapabilities.set(key, capability);
+  void getServerLogOpener(run)
+    .then((openLogs) => {
+      capability.available = openLogs !== undefined;
+    })
+    .catch((error: unknown) => {
+      void extLogger.log(
+        `Unable to discover variant analysis logs: ${getErrorMessage(error)}`,
+      );
+    })
+    .then(() => {
+      if (logCapabilities.get(key) === capability) {
+        logCapabilitiesChanged.fire();
+      }
+    });
+  return false;
 }
 
 async function getServerLogOpener(
@@ -88,10 +126,10 @@ async function getServerLogOpener(
   });
 }
 
-export async function withVariantAnalysisLogCapability(
+export function withVariantAnalysisLogCapability(
   run: VariantAnalysis,
-): Promise<VariantAnalysis> {
-  return { ...run, canViewLogs: await canViewVariantAnalysisLogs(run) };
+): VariantAnalysis {
+  return { ...run, canViewLogs: canViewVariantAnalysisLogs(run) };
 }
 
 export async function openServerVariantAnalysisLogs(

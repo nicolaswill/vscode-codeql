@@ -1,5 +1,10 @@
-import { ConfigurationTarget, extensions, workspace } from "vscode";
-import type { Extension } from "vscode";
+import {
+  ConfigurationTarget,
+  EventEmitter,
+  extensions,
+  workspace,
+} from "vscode";
+import type { ConfigurationChangeEvent, Disposable, Extension } from "vscode";
 import {
   getVariantAnalysisServerConfig,
   VariantAnalysisConfigListener,
@@ -9,6 +14,8 @@ import {
   canViewVariantAnalysisLogs,
   openServerVariantAnalysisLogs,
   withVariantAnalysisLogCapability,
+  onDidChangeVariantAnalysisLogCapabilities,
+  watchVariantAnalysisLogCapabilities,
   createGist,
   getVariantAnalysis,
   getVariantAnalysisRepo,
@@ -22,6 +29,7 @@ import { mockedObject } from "../../utils/mocking.helpers";
 import { testCredentialsWithStub } from "../../../factories/authentication";
 import type { VariantAnalysisServerTokenProvider } from "../../../../src/variant-analysis/gh-api/variant-analysis-server-client";
 import { extLogger } from "../../../../src/common/logging/vscode";
+import { setImmediate } from "timers/promises";
 
 const SERVER_URL = "https://mrva.example.com";
 const PROVIDER_ID = "example.token-provider";
@@ -43,8 +51,15 @@ describe("variant analysis custom server", () => {
     [string]
   >;
   let credentials: ReturnType<typeof testCredentialsWithStub>;
+  let configurationChanged: EventEmitter<ConfigurationChangeEvent>;
+  let watcher: Disposable;
 
   beforeEach(() => {
+    configurationChanged = new EventEmitter<ConfigurationChangeEvent>();
+    jest
+      .spyOn(workspace, "onDidChangeConfiguration")
+      .mockImplementation(configurationChanged.event);
+    watcher = watchVariantAnalysisLogCapabilities();
     credentials = testCredentialsWithStub();
     fetchSpy = jest
       .spyOn(global, "fetch")
@@ -61,6 +76,20 @@ describe("variant analysis custom server", () => {
         : undefined,
     );
   });
+
+  afterEach(() => {
+    watcher.dispose();
+    configurationChanged.dispose();
+  });
+
+  function discoveryFinished(): Promise<void> {
+    return new Promise((resolve) => {
+      const subscription = onDidChangeVariantAnalysisLogCapabilities(() => {
+        subscription.dispose();
+        resolve();
+      });
+    });
+  }
 
   describe("configuration", () => {
     it.each([`${SERVER_URL}/?environment=test`, `${SERVER_URL}/#fragment`])(
@@ -153,7 +182,10 @@ describe("variant analysis custom server", () => {
 
     it("hides server logs when the companion has no log hook", async () => {
       const run = { ...createMockVariantAnalysis({}), serverUrl: SERVER_URL };
-      expect(await canViewVariantAnalysisLogs(run)).toBe(false);
+      const finished = discoveryFinished();
+      expect(canViewVariantAnalysisLogs(run)).toBe(false);
+      await finished;
+      expect(canViewVariantAnalysisLogs(run)).toBe(false);
       await expect(openServerVariantAnalysisLogs(run)).rejects.toThrow(
         "does not support viewing logs",
       );
@@ -165,7 +197,7 @@ describe("variant analysis custom server", () => {
       async (state) => {
         const run = { ...createMockVariantAnalysis({}), serverUrl: SERVER_URL };
         const log = jest.spyOn(extLogger, "log").mockResolvedValue(undefined);
-        jest.spyOn(extensions, "getExtension").mockReturnValue(
+        const lookup = jest.spyOn(extensions, "getExtension").mockReturnValue(
           state === "missing"
             ? undefined
             : mockedObject<Extension<VariantAnalysisServerTokenProvider>>({
@@ -180,12 +212,20 @@ describe("variant analysis custom server", () => {
           jest.useFakeTimers();
         }
         try {
+          const finished = discoveryFinished();
           const result = withVariantAnalysisLogCapability(run);
+          expect(result).toEqual({ ...run, canViewLogs: false });
+          for (let id = 0; id < 10; id++) {
+            expect(canViewVariantAnalysisLogs({ ...run, id })).toBe(false);
+          }
+          expect(lookup).toHaveBeenCalledTimes(1);
           if (state === "stalled") {
             await jest.advanceTimersByTimeAsync(30_000);
             expect(jest.getTimerCount()).toBe(0);
           }
-          await expect(result).resolves.toEqual({ ...run, canViewLogs: false });
+          await finished;
+          expect(withVariantAnalysisLogCapability(run)).toEqual(result);
+          expect(lookup).toHaveBeenCalledTimes(1);
           expect(log).toHaveBeenCalledWith(
             expect.stringContaining("Unable to discover variant analysis logs"),
           );
@@ -198,6 +238,56 @@ describe("variant analysis custom server", () => {
           if (state === "stalled") {
             jest.useRealTimers();
           }
+        }
+      },
+    );
+
+    it.each(["serverUrl", "serverTokenProvider"])(
+      "invalidates discovery on %s changes and ignores stale completions",
+      async (setting) => {
+        let finishActivation!: (
+          provider: VariantAnalysisServerTokenProvider,
+        ) => void;
+        const activate = jest.fn().mockImplementation(
+          () =>
+            new Promise<VariantAnalysisServerTokenProvider>((resolve) => {
+              finishActivation = resolve;
+            }),
+        );
+        jest.spyOn(extensions, "getExtension").mockReturnValue(
+          mockedObject<Extension<VariantAnalysisServerTokenProvider>>({
+            isActive: false,
+            activate,
+          }),
+        );
+        const run = { ...createMockVariantAnalysis({}), serverUrl: SERVER_URL };
+        const changed = jest.fn();
+        const subscription = onDidChangeVariantAnalysisLogCapabilities(changed);
+        try {
+          expect(canViewVariantAnalysisLogs(run)).toBe(false);
+          const oldActivation = finishActivation;
+          configurationChanged.fire({
+            affectsConfiguration: (key) =>
+              key === `codeQL.variantAnalysis.${setting}`,
+          });
+          expect(changed).toHaveBeenCalledTimes(1);
+          expect(canViewVariantAnalysisLogs(run)).toBe(false);
+          expect(activate).toHaveBeenCalledTimes(2);
+          const finished = discoveryFinished();
+          finishActivation({ getVariantAnalysisServerToken });
+          await finished;
+          expect(canViewVariantAnalysisLogs(run)).toBe(false);
+          oldActivation({
+            getVariantAnalysisServerToken,
+            openVariantAnalysisLogs: jest.fn(),
+          });
+          // Drain the obsolete discovery's continuation without a real timer.
+          await setImmediate();
+          expect(canViewVariantAnalysisLogs(run)).toBe(false);
+          expect(changed).toHaveBeenCalledTimes(2);
+          expect(activate).toHaveBeenCalledTimes(2);
+        } finally {
+          subscription.dispose();
         }
       },
     );
@@ -219,7 +309,14 @@ describe("variant analysis custom server", () => {
         serverUrl: SERVER_URL,
         actionsWorkflowRunId: undefined,
       };
-      expect(await canViewVariantAnalysisLogs(run)).toBe(true);
+      const finished = discoveryFinished();
+      expect(canViewVariantAnalysisLogs(run)).toBe(false);
+      expect(canViewVariantAnalysisLogs({ ...run, id: run.id + 1 })).toBe(
+        false,
+      );
+      await finished;
+      expect(canViewVariantAnalysisLogs(run)).toBe(true);
+      expect(activate).toHaveBeenCalledTimes(1);
       await openServerVariantAnalysisLogs(run);
       expect(activate).toHaveBeenCalled();
       expect(openVariantAnalysisLogs).toHaveBeenCalledWith(SERVER_URL, run.id);
@@ -230,7 +327,7 @@ describe("variant analysis custom server", () => {
         "Cannot open logs",
       );
       await setSetting("serverUrl", "https://other.example.com");
-      expect(await canViewVariantAnalysisLogs(run)).toBe(false);
+      expect(canViewVariantAnalysisLogs(run)).toBe(false);
       openVariantAnalysisLogs.mockClear();
       await expect(openServerVariantAnalysisLogs(run)).rejects.toThrow(
         "different server",

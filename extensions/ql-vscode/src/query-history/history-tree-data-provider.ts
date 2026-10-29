@@ -7,7 +7,10 @@ import { getLanguage, getQueryId } from "./query-history-info";
 import { QueryStatus } from "./query-status";
 import type { HistoryItemLabelProvider } from "./history-item-label-provider";
 import type { LanguageContextStore } from "../language-context-store";
-import { canViewVariantAnalysisLogs } from "../variant-analysis/variant-analysis-api";
+import {
+  canViewVariantAnalysisLogs,
+  onDidChangeVariantAnalysisLogCapabilities,
+} from "../variant-analysis/variant-analysis-api";
 
 export enum SortOrder {
   NameAsc = "NameAsc",
@@ -69,6 +72,11 @@ export class HistoryTreeDataProvider
     private readonly languageContext: LanguageContextStore,
   ) {
     super();
+    this.push(
+      onDidChangeVariantAnalysisLogCapabilities(() =>
+        this._onDidChangeTreeData.fire(undefined),
+      ),
+    );
   }
 
   async getTreeItem(element: QueryHistoryInfo): Promise<TreeItem> {
@@ -125,7 +133,7 @@ export class HistoryTreeDataProvider
   private async getContextValue(element: QueryHistoryInfo): Promise<string> {
     const hasServerLogs =
       element.t === "variant-analysis" && element.variantAnalysis.serverUrl
-        ? await canViewVariantAnalysisLogs(element.variantAnalysis)
+        ? canViewVariantAnalysisLogs(element.variantAnalysis)
         : false;
     switch (element.status) {
       case QueryStatus.InProgress:

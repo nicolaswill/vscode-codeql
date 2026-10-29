@@ -56,10 +56,17 @@ The optional `openVariantAnalysisLogs` hook enables **View logs** in history and
 The provider owns log retrieval, authentication, and presentation (for example, opening a browser
 or an output channel). CodeQL passes the originating server URL and analysis/session ID, not an
 Actions workflow ID. Without the hook the action is hidden. Capability discovery activates the
-provider with the same 30-second activation bound; opening logs does not request a token from CodeQL.
-If discovery fails, CodeQL logs the error and hides the action without preventing saved results from loading.
+provider in the background with the same 30-second activation bound. History and result views render
+immediately without the action, then refresh when discovery finishes. Discovery is shared and cached
+per server URL and provider ID, including failures; changing either setting clears the cache.
+If discovery fails, CodeQL logs the error and leaves the action hidden without delaying saved results.
+Opening logs does not request a token from CodeQL.
 The hook should resolve once its viewer is opened and reject on failure. Runs from another configured
 server cannot invoke it. No log endpoint or GitHub Actions compatibility is required.
+
+Providers should publish their exports immediately from `activate()`. Catalog downloads, sign-in
+prompts, and other potentially unbounded work must not block activation; perform them lazily in the
+operation that needs them.
 
 ## Behavior when a server is configured
 

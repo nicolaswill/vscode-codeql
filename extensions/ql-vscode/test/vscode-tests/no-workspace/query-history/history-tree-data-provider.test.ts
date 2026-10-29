@@ -173,7 +173,7 @@ describe("HistoryTreeDataProvider", () => {
           async (canViewLogs, workflowId) => {
             jest
               .spyOn(variantAnalysisApi, "canViewVariantAnalysisLogs")
-              .mockResolvedValue(canViewLogs);
+              .mockReturnValue(canViewLogs);
             const item = createMockVariantAnalysisHistoryItem({
               historyItemStatus,
               variantAnalysisStatus,
