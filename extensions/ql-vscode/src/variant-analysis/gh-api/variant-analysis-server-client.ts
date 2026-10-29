@@ -11,6 +11,10 @@ import type { VariantAnalysisServerConfig } from "../../config";
  */
 export interface VariantAnalysisServerTokenProvider {
   getVariantAnalysisServerToken(serverUrl: string): Promise<string | undefined>;
+  openVariantAnalysisLogs?(
+    serverUrl: string,
+    analysisId: number,
+  ): Promise<void>;
 }
 
 /** The server does not use controller repositories, so this ID is sent instead. */
@@ -19,11 +23,14 @@ export const SERVER_CONTROLLER_REPO_ID = 0;
 const MAX_ERROR_BODY_LENGTH = 500;
 const TOKEN_PROVIDER_TIMEOUT_MS = 30_000;
 
-async function getToken(server: VariantAnalysisServerConfig): Promise<string> {
+export async function withVariantAnalysisServerProvider<T>(
+  server: VariantAnalysisServerConfig,
+  action: (provider: Partial<VariantAnalysisServerTokenProvider>) => Promise<T>,
+): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      getTokenFromExtension(server),
+      activateProvider(server).then(action),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           reject(
@@ -39,9 +46,27 @@ async function getToken(server: VariantAnalysisServerConfig): Promise<string> {
   }
 }
 
-async function getTokenFromExtension(
+async function getToken(server: VariantAnalysisServerConfig): Promise<string> {
+  return withVariantAnalysisServerProvider(server, async (api) => {
+    if (typeof api?.getVariantAnalysisServerToken !== "function") {
+      throw new Error(
+        `The extension '${server.tokenProviderExtensionId}' does not provide a variant analysis server token.`,
+      );
+    }
+
+    const token = await api.getVariantAnalysisServerToken(server.url);
+    if (typeof token !== "string" || !token) {
+      throw new Error(
+        `The extension '${server.tokenProviderExtensionId}' did not return a variant analysis server token. Check that you are signed in.`,
+      );
+    }
+    return token;
+  });
+}
+
+async function activateProvider(
   server: VariantAnalysisServerConfig,
-): Promise<string> {
+): Promise<Partial<VariantAnalysisServerTokenProvider>> {
   const extensionId = server.tokenProviderExtensionId;
   if (!extensionId) {
     throw new Error(
@@ -59,22 +84,7 @@ async function getTokenFromExtension(
     );
   }
 
-  const api = extension.isActive
-    ? extension.exports
-    : await extension.activate();
-  if (typeof api?.getVariantAnalysisServerToken !== "function") {
-    throw new Error(
-      `The extension '${extensionId}' does not provide a variant analysis server token.`,
-    );
-  }
-
-  const token = await api.getVariantAnalysisServerToken(server.url);
-  if (typeof token !== "string" || !token) {
-    throw new Error(
-      `The extension '${extensionId}' did not return a variant analysis server token. Check that you are signed in.`,
-    );
-  }
-  return token;
+  return extension.isActive ? extension.exports : await extension.activate();
 }
 
 /**

@@ -1,17 +1,17 @@
 import type { Credentials } from "../common/authentication";
+import { getErrorMessage } from "../common/helpers-pure";
+import { extLogger } from "../common/logging/vscode";
 import { getVariantAnalysisServerConfig } from "../config";
 import { cancelVariantAnalysis as cancelGitHubVariantAnalysis } from "./gh-api/gh-actions-api-client";
-import {
-  createGist as createGitHubGist,
-  getVariantAnalysis as getGitHubVariantAnalysis,
-  getVariantAnalysisRepo as getGitHubVariantAnalysisRepo,
-  submitVariantAnalysis as submitGitHubVariantAnalysis,
-} from "./gh-api/gh-api-client";
+import { createGist as createGitHubGist } from "./gh-api/gh-api-client";
 import type {
   VariantAnalysis as ApiVariantAnalysis,
   VariantAnalysisRepoTask as ApiVariantAnalysisRepoTask,
 } from "./gh-api/variant-analysis";
-import { requestVariantAnalysisServer } from "./gh-api/variant-analysis-server-client";
+import {
+  withVariantAnalysisServerProvider,
+  requestVariantAnalysisServer,
+} from "./gh-api/variant-analysis-server-client";
 import { mapVariantAnalysisSubmission } from "./variant-analysis-mapper";
 import type {
   VariantAnalysis,
@@ -28,6 +28,21 @@ function variantAnalysesPath(controllerRepoId: number): string {
   return `/repositories/${controllerRepoId}/code-scanning/codeql/variant-analyses`;
 }
 
+async function request<T>(
+  credentials: Credentials,
+  serverUrl: string | undefined,
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const server = getServerForVariantAnalysis(serverUrl);
+  if (server) {
+    return requestVariantAnalysisServer<T>(server, method, path, body);
+  }
+  const octokit = await credentials.getOctokit();
+  return (await octokit.request<T>({ method, url: path, data: body })).data;
+}
+
 export function getServerForVariantAnalysis(serverUrl: string | undefined) {
   const server = getVariantAnalysisServerConfig();
   if (server?.url !== serverUrl) {
@@ -38,17 +53,67 @@ export function getServerForVariantAnalysis(serverUrl: string | undefined) {
   return server;
 }
 
+export async function canViewVariantAnalysisLogs(
+  run: VariantAnalysis,
+): Promise<boolean> {
+  if (!run.serverUrl) {
+    return run.actionsWorkflowRunId !== undefined;
+  }
+  try {
+    return (await getServerLogOpener(run)) !== undefined;
+  } catch (error) {
+    void extLogger.log(
+      `Unable to discover variant analysis logs: ${getErrorMessage(error)}`,
+    );
+    return false;
+  }
+}
+
+async function getServerLogOpener(
+  run: VariantAnalysis,
+): Promise<(() => Promise<void>) | undefined> {
+  const server = getVariantAnalysisServerConfig();
+  if (
+    !run.serverUrl ||
+    server?.url !== run.serverUrl ||
+    !server.tokenProviderExtensionId
+  ) {
+    return undefined;
+  }
+  return withVariantAnalysisServerProvider(server, async (provider) => {
+    const openLogs = provider?.openVariantAnalysisLogs;
+    return typeof openLogs === "function"
+      ? () => openLogs.call(provider, server.url, run.id)
+      : undefined;
+  });
+}
+
+export async function withVariantAnalysisLogCapability(
+  run: VariantAnalysis,
+): Promise<VariantAnalysis> {
+  return { ...run, canViewLogs: await canViewVariantAnalysisLogs(run) };
+}
+
+export async function openServerVariantAnalysisLogs(
+  run: VariantAnalysis,
+): Promise<void> {
+  getServerForVariantAnalysis(run.serverUrl);
+  const openLogs = await getServerLogOpener(run);
+  if (!openLogs) {
+    throw new Error(
+      "The configured variant analysis provider does not support viewing logs.",
+    );
+  }
+  await openLogs();
+}
+
 export async function submitVariantAnalysis(
   credentials: Credentials,
   submission: VariantAnalysisSubmission,
 ): Promise<ApiVariantAnalysis> {
-  const server = getServerForVariantAnalysis(submission.serverUrl);
-  if (!server) {
-    return submitGitHubVariantAnalysis(credentials, submission);
-  }
-
-  return requestVariantAnalysisServer<ApiVariantAnalysis>(
-    server,
+  return request<ApiVariantAnalysis>(
+    credentials,
+    submission.serverUrl,
     "POST",
     variantAnalysesPath(submission.controllerRepoId),
     mapVariantAnalysisSubmission(submission),
@@ -61,17 +126,9 @@ export async function getVariantAnalysis(
   variantAnalysisId: number,
   serverUrl?: string,
 ): Promise<ApiVariantAnalysis> {
-  const server = getServerForVariantAnalysis(serverUrl);
-  if (!server) {
-    return getGitHubVariantAnalysis(
-      credentials,
-      controllerRepoId,
-      variantAnalysisId,
-    );
-  }
-
-  return requestVariantAnalysisServer<ApiVariantAnalysis>(
-    server,
+  return request<ApiVariantAnalysis>(
+    credentials,
+    serverUrl,
     "GET",
     `${variantAnalysesPath(controllerRepoId)}/${variantAnalysisId}`,
   );
@@ -84,18 +141,9 @@ export async function getVariantAnalysisRepo(
   repoId: number,
   serverUrl?: string,
 ): Promise<ApiVariantAnalysisRepoTask> {
-  const server = getServerForVariantAnalysis(serverUrl);
-  if (!server) {
-    return getGitHubVariantAnalysisRepo(
-      credentials,
-      controllerRepoId,
-      variantAnalysisId,
-      repoId,
-    );
-  }
-
-  return requestVariantAnalysisServer<ApiVariantAnalysisRepoTask>(
-    server,
+  return request<ApiVariantAnalysisRepoTask>(
+    credentials,
+    serverUrl,
     "GET",
     `${variantAnalysesPath(controllerRepoId)}/${variantAnalysisId}/repositories/${repoId}`,
   );

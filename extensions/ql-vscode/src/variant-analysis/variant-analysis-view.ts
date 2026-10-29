@@ -22,6 +22,7 @@ import type {
 import { telemetryListener } from "../common/vscode/telemetry";
 import { redactableError } from "../common/errors";
 import { DataFlowPathsView } from "./data-flow-paths-view";
+import { withVariantAnalysisLogCapability } from "./variant-analysis-api";
 import type { DataFlowPaths } from "./shared/data-flow-paths";
 import type { App } from "../common/app";
 import {
@@ -70,7 +71,7 @@ export class VariantAnalysisView
 
     await this.postMessage({
       t: "setVariantAnalysis",
-      variantAnalysis,
+      variantAnalysis: await withVariantAnalysisLogCapability(variantAnalysis),
     });
 
     const panel = await this.getPanel();
@@ -212,7 +213,7 @@ export class VariantAnalysisView
 
     await this.postMessage({
       t: "setVariantAnalysis",
-      variantAnalysis,
+      variantAnalysis: await withVariantAnalysisLogCapability(variantAnalysis),
     });
 
     await this.postMessage({

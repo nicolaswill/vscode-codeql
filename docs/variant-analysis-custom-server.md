@@ -36,6 +36,7 @@ The extension named in `serverTokenProvider` must return the following from `act
 ```ts
 export interface VariantAnalysisServerTokenProvider {
   getVariantAnalysisServerToken(serverUrl: string): Promise<string | undefined>;
+  openVariantAnalysisLogs?(serverUrl: string, analysisId: number): Promise<void>;
 }
 ```
 
@@ -51,6 +52,15 @@ or token-refresh argument.
 Only the extension that the user or administrator names is called. Extensions cannot register
 themselves as providers.
 
+The optional `openVariantAnalysisLogs` hook enables **View logs** in history and result views.
+The provider owns log retrieval, authentication, and presentation (for example, opening a browser
+or an output channel). CodeQL passes the originating server URL and analysis/session ID, not an
+Actions workflow ID. Without the hook the action is hidden. Capability discovery activates the
+provider with the same 30-second activation bound; opening logs does not request a token from CodeQL.
+If discovery fails, CodeQL logs the error and hides the action without preventing saved results from loading.
+The hook should resolve once its viewer is opened and reject on failure. Runs from another configured
+server cannot invoke it. No log endpoint or GitHub Actions compatibility is required.
+
 ## Behavior when a server is configured
 
 - MRVA is enabled regardless of `github-enterprise.uri`. The GitHub sign-in, GitHub database
@@ -60,7 +70,9 @@ themselves as providers.
   the current server setting differs. Restore the original setting to resume them. Legacy runs
   without a server URL are treated as GitHub runs.
 - The GitHub token is never sent to the server, and results are never uploaded to GitHub:
-  "Export to gist" and "View logs" (GitHub Actions) are unavailable.
+  "Export to gist" is unavailable; "View logs" uses the companion's optional hook, not GitHub Actions.
+- Removing a running server analysis from history offers to cancel it through the server.
+  Dismissing that offer removes only the local history entry; the server run continues.
 - Result artifacts are downloaded from `artifact_url` without authentication, as on GitHub.
 - If a repository task has no `database_commit_sha`, file links point to `HEAD`.
   These links may not match the analyzed revision.

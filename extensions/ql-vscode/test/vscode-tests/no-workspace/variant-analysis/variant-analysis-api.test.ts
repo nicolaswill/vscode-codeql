@@ -6,6 +6,9 @@ import {
 } from "../../../../src/config";
 import {
   cancelVariantAnalysis,
+  canViewVariantAnalysisLogs,
+  openServerVariantAnalysisLogs,
+  withVariantAnalysisLogCapability,
   createGist,
   getVariantAnalysis,
   getVariantAnalysisRepo,
@@ -18,14 +21,7 @@ import { createMockVariantAnalysis } from "../../../factories/variant-analysis/s
 import { mockedObject } from "../../utils/mocking.helpers";
 import { testCredentialsWithStub } from "../../../factories/authentication";
 import type { VariantAnalysisServerTokenProvider } from "../../../../src/variant-analysis/gh-api/variant-analysis-server-client";
-import {
-  writeQueryHistoryToFile,
-  readQueryHistoryFromFile,
-} from "../../../../src/query-history/store/query-history-store";
-import { createMockVariantAnalysisHistoryItem } from "../../../factories/query-history/variant-analysis-history-item";
-import { join } from "path";
-import { tmpDir } from "../../../../src/tmp-dir";
-import { remove } from "fs-extra";
+import { extLogger } from "../../../../src/common/logging/vscode";
 
 const SERVER_URL = "https://mrva.example.com";
 const PROVIDER_ID = "example.token-provider";
@@ -155,47 +151,91 @@ describe("variant analysis custom server", () => {
       await setSetting("serverTokenProvider", PROVIDER_ID);
     });
 
-    it("routes a saved and reloaded server run back to its original endpoint", async () => {
-      const history = createMockVariantAnalysisHistoryItem({});
-      history.variantAnalysis.serverUrl = SERVER_URL;
-      history.variantAnalysis.controllerRepo.id = 0;
-      history.variantAnalysis.actionsWorkflowRunId = 42;
-      history.variantAnalysis.controllerRepo.htmlUrl =
-        "https://source.example.com/org/controller";
-      const historyPath = join(tmpDir.name, "custom-server-history.json");
-      try {
-        await writeQueryHistoryToFile([history], historyPath);
-        const [reloaded] = await readQueryHistoryFromFile(historyPath);
-        if (reloaded.t !== "variant-analysis") {
-          throw new Error("Expected a variant analysis history item");
+    it("hides server logs when the companion has no log hook", async () => {
+      const run = { ...createMockVariantAnalysis({}), serverUrl: SERVER_URL };
+      expect(await canViewVariantAnalysisLogs(run)).toBe(false);
+      await expect(openServerVariantAnalysisLogs(run)).rejects.toThrow(
+        "does not support viewing logs",
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it.each(["missing", "failed", "stalled"])(
+      "preserves saved results when the log provider is %s",
+      async (state) => {
+        const run = { ...createMockVariantAnalysis({}), serverUrl: SERVER_URL };
+        const log = jest.spyOn(extLogger, "log").mockResolvedValue(undefined);
+        jest.spyOn(extensions, "getExtension").mockReturnValue(
+          state === "missing"
+            ? undefined
+            : mockedObject<Extension<VariantAnalysisServerTokenProvider>>({
+                isActive: false,
+                activate: () =>
+                  state === "failed"
+                    ? Promise.reject(new Error("Activation failed"))
+                    : new Promise(() => {}),
+              }),
+        );
+        if (state === "stalled") {
+          jest.useFakeTimers();
         }
-        const run = reloaded.variantAnalysis;
-        expect(run.serverUrl).toBe(SERVER_URL);
-        expect(run.controllerRepo.htmlUrl).toBe(
-          history.variantAnalysis.controllerRepo.htmlUrl,
-        );
-        await getVariantAnalysis(
-          credentials,
-          run.controllerRepo.id,
-          run.id,
-          run.serverUrl,
-        );
-        await getVariantAnalysisRepo(
-          credentials,
-          run.controllerRepo.id,
-          run.id,
-          7,
-          run.serverUrl,
-        );
-        await cancelVariantAnalysis(credentials, run);
-        expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
-          `${SERVER_URL}/repositories/0/code-scanning/codeql/variant-analyses/${run.id}`,
-          `${SERVER_URL}/repositories/0/code-scanning/codeql/variant-analyses/${run.id}/repositories/7`,
-          `${SERVER_URL}/repositories/0/code-scanning/codeql/variant-analyses/${run.id}/cancel`,
-        ]);
-      } finally {
-        await remove(historyPath);
-      }
+        try {
+          const result = withVariantAnalysisLogCapability(run);
+          if (state === "stalled") {
+            await jest.advanceTimersByTimeAsync(30_000);
+            expect(jest.getTimerCount()).toBe(0);
+          }
+          await expect(result).resolves.toEqual({ ...run, canViewLogs: false });
+          expect(log).toHaveBeenCalledWith(
+            expect.stringContaining("Unable to discover variant analysis logs"),
+          );
+          expect(getVariantAnalysisServerToken).not.toHaveBeenCalled();
+          expect(fetchSpy).not.toHaveBeenCalled();
+          if (state !== "stalled") {
+            await expect(openServerVariantAnalysisLogs(run)).rejects.toThrow();
+          }
+        } finally {
+          if (state === "stalled") {
+            jest.useRealTimers();
+          }
+        }
+      },
+    );
+
+    it("activates the companion and delegates log viewing without fetching a token", async () => {
+      const openVariantAnalysisLogs = jest.fn().mockResolvedValue(undefined);
+      const activate = jest.fn().mockResolvedValue({
+        getVariantAnalysisServerToken,
+        openVariantAnalysisLogs,
+      });
+      jest.spyOn(extensions, "getExtension").mockReturnValue(
+        mockedObject<Extension<VariantAnalysisServerTokenProvider>>({
+          isActive: false,
+          activate,
+        }),
+      );
+      const run = {
+        ...createMockVariantAnalysis({}),
+        serverUrl: SERVER_URL,
+        actionsWorkflowRunId: undefined,
+      };
+      expect(await canViewVariantAnalysisLogs(run)).toBe(true);
+      await openServerVariantAnalysisLogs(run);
+      expect(activate).toHaveBeenCalled();
+      expect(openVariantAnalysisLogs).toHaveBeenCalledWith(SERVER_URL, run.id);
+      expect(getVariantAnalysisServerToken).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      openVariantAnalysisLogs.mockRejectedValue(new Error("Cannot open logs"));
+      await expect(openServerVariantAnalysisLogs(run)).rejects.toThrow(
+        "Cannot open logs",
+      );
+      await setSetting("serverUrl", "https://other.example.com");
+      expect(await canViewVariantAnalysisLogs(run)).toBe(false);
+      openVariantAnalysisLogs.mockClear();
+      await expect(openServerVariantAnalysisLogs(run)).rejects.toThrow(
+        "different server",
+      );
+      expect(openVariantAnalysisLogs).not.toHaveBeenCalled();
     });
 
     it.each(["activation", "token"])(

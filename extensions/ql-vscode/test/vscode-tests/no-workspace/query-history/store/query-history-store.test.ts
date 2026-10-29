@@ -112,6 +112,8 @@ describe("write and read", () => {
   it("preserves server origins and repository URLs without changing legacy history", async () => {
     const serverRun = createMockVariantAnalysisHistoryItem({});
     serverRun.variantAnalysis.serverUrl = "https://mrva.example.com";
+    serverRun.variantAnalysis.controllerRepo.htmlUrl =
+      "https://source.example.com/org/controller";
     serverRun.variantAnalysis.scannedRepos![0].repository.htmlUrl =
       "https://source.example.com/org/repo";
     const legacyRun = createMockVariantAnalysisHistoryItem({});

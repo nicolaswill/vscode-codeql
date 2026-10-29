@@ -7,6 +7,8 @@ export interface VariantAnalysis {
   id: number;
   /** Custom server that created this run; absent for GitHub and legacy runs. */
   serverUrl?: string;
+  /** Runtime capability supplied to views, not persisted in query history. */
+  canViewLogs?: boolean;
   controllerRepo: Repository;
   language: QueryLanguage;
   query: {
@@ -31,6 +33,13 @@ export interface VariantAnalysis {
   failureReason?: VariantAnalysisFailureReason;
   scannedRepos?: VariantAnalysisScannedRepository[];
   skippedRepos?: VariantAnalysisSkippedRepositories;
+}
+
+export function hasVariantAnalysisLogs(run: VariantAnalysis): boolean {
+  return (
+    run.canViewLogs ??
+    (!run.serverUrl && run.actionsWorkflowRunId !== undefined)
+  );
 }
 
 export function parseVariantAnalysisQueryLanguage(

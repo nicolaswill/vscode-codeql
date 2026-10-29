@@ -4,6 +4,7 @@ import {
   cancelVariantAnalysis,
   submitVariantAnalysis,
   getVariantAnalysisRepo,
+  openServerVariantAnalysisLogs,
 } from "./variant-analysis-api";
 import type { VariantAnalysis as ApiVariantAnalysis } from "./gh-api/variant-analysis";
 import type {
@@ -965,9 +966,8 @@ export class VariantAnalysisManager
     }
 
     if (variantAnalysis.serverUrl) {
-      throw new Error(
-        "Viewing logs is not supported when using a custom variant analysis server.",
-      );
+      await openServerVariantAnalysisLogs(variantAnalysis);
+      return;
     }
 
     const actionsWorkflowRunUrl = getActionsWorkflowRunUrl(

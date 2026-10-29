@@ -185,17 +185,25 @@ async function exportVariantAnalysisAnalysisResults(
     summaries,
   );
 
-  await exportResults(
-    exportedResultsPath,
-    description,
-    markdownFiles,
-    exportFormat,
-    commandManager,
-    credentials,
-    progress,
-    token,
-    variantAnalysis.serverUrl,
-  );
+  if (exportFormat === "gist") {
+    await exportToGist(
+      description,
+      markdownFiles,
+      commandManager,
+      credentials,
+      progress,
+      token,
+      variantAnalysis.serverUrl,
+    );
+  } else {
+    await exportToLocalMarkdown(
+      exportedResultsPath,
+      markdownFiles,
+      commandManager,
+      progress,
+      token,
+    );
+  }
 }
 
 /**
@@ -233,42 +241,6 @@ async function determineExportFormat(
   }
 
   return undefined;
-}
-
-async function exportResults(
-  exportedResultsPath: string,
-  description: string,
-  markdownFiles: MarkdownFile[],
-  exportFormat: "gist" | "local",
-  commandManager: AppCommandManager,
-  credentials: Credentials,
-  progress?: ProgressCallback,
-  token?: CancellationToken,
-  serverUrl?: string,
-) {
-  if (token?.isCancellationRequested) {
-    throw new UserCancellationException("Cancelled");
-  }
-
-  if (exportFormat === "gist") {
-    await exportToGist(
-      description,
-      markdownFiles,
-      commandManager,
-      credentials,
-      progress,
-      token,
-      serverUrl,
-    );
-  } else if (exportFormat === "local") {
-    await exportToLocalMarkdown(
-      exportedResultsPath,
-      markdownFiles,
-      commandManager,
-      progress,
-      token,
-    );
-  }
 }
 
 async function exportToGist(

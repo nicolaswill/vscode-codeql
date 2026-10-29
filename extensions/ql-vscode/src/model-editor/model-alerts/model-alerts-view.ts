@@ -22,6 +22,7 @@ import type {
 import type { AppEvent, AppEventEmitter } from "../../common/events";
 import type { ModeledMethod } from "../modeled-method";
 import type { MethodSignature } from "../method";
+import { withVariantAnalysisLogCapability } from "../../variant-analysis/variant-analysis-api";
 
 export class ModelAlertsView extends AbstractWebview<
   ToModelAlertsMessage,
@@ -130,7 +131,7 @@ export class ModelAlertsView extends AbstractWebview<
 
     await this.postMessage({
       t: "setVariantAnalysis",
-      variantAnalysis,
+      variantAnalysis: await withVariantAnalysisLogCapability(variantAnalysis),
     });
   }
 
